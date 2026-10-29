@@ -547,11 +547,20 @@ const AWARDS=[
 const PEER_PREFIX="brumefosse-v1-";
 const LIB_PEER="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js";
 const LIB_QR="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js";
+/* Relais TURN (Metered / Open Relay, offre gratuite) : indispensable quand les appareils sont sur des réseaux différents (wifi + 4G).
+   Renseigner le nom de l'application Metered et la clé API. Vide = connexion directe seulement. */
+const TURN={app:"",key:""};
+let iceCache;
+async function iceServers(){if(iceCache!==undefined)return iceCache;iceCache=null;
+  if(TURN.app&&TURN.key){try{const r=await fetch("https://"+TURN.app+".metered.live/api/v1/turn/credentials?apiKey="+encodeURIComponent(TURN.key));
+    if(r.ok){const l=await r.json();if(Array.isArray(l)&&l.length)iceCache=[{urls:"stun:stun.l.google.com:19302"}].concat(l)}}catch(e){}}
+  return iceCache}
+async function peerOptions(){const ice=await iceServers();return ice?{config:{iceServers:ice}}:{}}
 function loadScript(src){return new Promise((ok,ko)=>{const s=document.createElement("script");s.src=src;s.onload=ok;s.onerror=()=>ko(new Error("load"));document.head.appendChild(s)})}
 async function getPeerCtor(){if(!window.Peer&&!(window.peerjs&&window.peerjs.Peer))await loadScript(LIB_PEER);
   const C=window.Peer||(window.peerjs&&window.peerjs.Peer);if(!C)throw new Error("load");return C}
-async function peerHost(code){const Peer=await getPeerCtor();
-  return new Promise((ok,ko)=>{const peer=new Peer(PEER_PREFIX+code.toLowerCase());const conns=new Map(),H={},peerFns=[];let opened=false;
+async function peerHost(code){const Peer=await getPeerCtor(),opts=await peerOptions();
+  return new Promise((ok,ko)=>{const peer=new Peer(PEER_PREFIX+code.toLowerCase(),opts);const conns=new Map(),H={},peerFns=[];let opened=false;
     const notify=joined=>{const peers=[...conns.values()].map(c=>({peer:c.peer,presence:{role:"manette"}}));peerFns.forEach(f=>f({peers,joined:joined?[joined]:[],left:[],updated:[]}))};
     const api={mode:"direct",
       emit(topic,data){for(const c of conns.values())if(c.open){try{c.send({topic,data})}catch(e){}}return Promise.resolve()},
@@ -566,8 +575,8 @@ async function peerHost(code){const Peer=await getPeerCtor();
       const drop=()=>{if(conns.get(c.peer)===c){conns.delete(c.peer);notify(null)}};c.on("close",drop);c.on("error",drop)});
     peer.on("disconnected",()=>{try{peer.reconnect()}catch(e){}});
     peer.on("error",e=>{if(!opened){try{peer.destroy()}catch(x){}ko(e)}})})}
-async function peerJoin(code){const Peer=await getPeerCtor();
-  return new Promise((ok,ko)=>{const peer=new Peer();const H={};let conn=null,joined=false,dead=false;
+async function peerJoin(code){const Peer=await getPeerCtor(),opts=await peerOptions();
+  return new Promise((ok,ko)=>{const peer=new Peer(undefined,opts);const H={};let conn=null,joined=false,dead=false;
     const api={mode:"direct",
       emit(topic,data){if(conn&&conn.open){try{conn.send({topic,data});return Promise.resolve()}catch(e){}}return Promise.reject(new Error("closed"))},
       on(topic,fn){(H[topic]=H[topic]||[]).push(fn);return()=>{}},
@@ -958,7 +967,8 @@ async function joinPad(){const code=$("#jCode").value.trim().toUpperCase(),name=
   const fail=t=>{err.textContent=t;$("#jBtn").disabled=false;$("#jBtn").textContent="Rejoindre"};
   if(P.room){try{if(P.R)await P.R.leave();P.R=await P.room.join("brume-"+code.toLowerCase())}catch(e){fail("Impossible de rejoindre la salle. Réessayez dans un instant.");return}}
   else{try{if(P.R)await P.R.leave();P.R=null;P.R=await peerJoin(code)}catch(e){const t=e&&e.type;
-    fail(t==="peer-unavailable"||t==="timeout"?"Aucune partie trouvée avec le code "+code+". Vérifiez le code affiché sur la télé.":e&&e.message==="load"?"Impossible de charger le module de connexion. Vérifiez votre accès à Internet.":"Connexion impossible ("+(t||(e&&e.message))+"). Réessayez.");return}}
+    fail(t==="peer-unavailable"?"Aucune partie trouvée avec le code "+code+". Vérifiez le code affiché sur la télé.":
+      t==="timeout"?"La partie existe, mais votre téléphone n'arrive pas à joindre la télé. Ils sont sans doute sur des réseaux différents (wifi et 4G) : connectez le téléphone au même wifi que la télé.":e&&e.message==="load"?"Impossible de charger le module de connexion. Vérifiez votre accès à Internet.":"Connexion impossible ("+(t||(e&&e.message))+"). Réessayez.");return}}
   P.R.on("state",onState);P.R.presence({role:"manette"}).catch(()=>{});
   const hi=()=>send({t:"hello",name:P.me.name,cls:P.me.cls});hi();clearInterval(P.hiT);P.hiT=setInterval(hi,3000);
   keepAwake();
